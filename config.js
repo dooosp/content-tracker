@@ -25,6 +25,30 @@ export const NAVER = {
   requestDelay: 200,      // ms between requests
 };
 
+/** Twitter(X) API v2 설정 */
+export const TWITTER = {
+  bearerToken: process.env.TWITTER_BEARER_TOKEN || '',
+  keywords: ['AI', 'OpenAI', '스타트업', '투자', '프로그래밍'],
+  maxResults: parseInt(process.env.TWITTER_MAX_RESULTS, 10) || 20,
+};
+
+/** YouTube Data API v3 설정 */
+export const YOUTUBE = {
+  apiKey: process.env.YOUTUBE_API_KEY || '',
+  queries: ['AI 뉴스', '스타트업 투자', '프로그래밍 트렌드'],
+  maxResults: parseInt(process.env.YOUTUBE_MAX_RESULTS, 10) || 12,
+};
+
+/** RSS 피드 설정 (comma-separated env 우선) */
+export const RSS_FEEDS = (process.env.RSS_FEEDS || [
+  'https://hnrss.org/frontpage',
+  'https://feeds.feedburner.com/TechCrunch/',
+  'https://www.theverge.com/rss/index.xml',
+].join(','))
+  .split(',')
+  .map(v => v.trim())
+  .filter(Boolean);
+
 /** 스코어링 팩터 (합산 100점) */
 export const SCORING = {
   weights: {

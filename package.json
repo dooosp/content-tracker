@@ -13,6 +13,8 @@
     "helmet": "^8.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
+    "node-cron": "^3.0.3",
+    "rss-parser": "^3.13.0",
     "config-loader": "file:../shared-libs/config-loader",
     "server-base": "file:../shared-libs/server-base"
   }
