@@ -3,7 +3,7 @@ const require = createRequire(import.meta.url);
 const { createServer, startServer } = require('server-base');
 import cron from 'node-cron';
 
-import { REDDIT, NAVER, TWITTER, YOUTUBE, RSS_FEEDS, SERVER_PORT } from './config.js';
+import { REDDIT, NAVER, TWITTER, YOUTUBE, RSS_FEEDS, GEMINI_API_KEY, SERVER_PORT } from './config.js';
 import redditClient from './lib/reddit-client.js';
 import naverClient from './lib/naver-client.js';
 import twitterClient from './lib/twitter-client.js';
@@ -13,6 +13,7 @@ import contentAnalyzer from './lib/content-analyzer.js';
 import contentScorer from './lib/content-scorer.js';
 import strategyAdvisor from './lib/strategy-advisor.js';
 import snapshotStore from './lib/snapshot-store.js';
+import { generateIdeas } from './lib/idea-generator.js';
 
 const SOURCE_NAMES = ['reddit', 'naver', 'twitter', 'youtube', 'rss'];
 const asBool = (value, fallback = true) => {
@@ -307,6 +308,24 @@ app.get('/api/content/trends', async (req, res) => {
       totalPosts: data.trends.length,
     });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/content/ideas — LLM 기반 트렌드 요약 + 아이디어 제안 + 틈새 분석
+app.get('/api/content/ideas', async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.status(501).json({ error: 'GEMINI_API_KEY not configured' });
+  }
+
+  try {
+    const data = await getData();
+    const result = await generateIdeas(data.posts, data.portfolio);
+    res.json(result);
+  } catch (err) {
+    if (err.code === 'NO_API_KEY') {
+      return res.status(501).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });

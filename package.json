@@ -16,6 +16,7 @@
     "node-cron": "^3.0.3",
     "rss-parser": "^3.13.0",
     "config-loader": "file:../shared-libs/config-loader",
+    "llm-client": "file:../shared-libs/llm-client",
     "server-base": "file:../shared-libs/server-base"
   }
 }

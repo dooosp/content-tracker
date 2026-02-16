@@ -81,4 +81,12 @@ export const TOPIC_KEYWORDS = {
   'Career': ['커리어', '이직', '취업', '면접', '회사', 'career', 'job', 'interview', 'salary', 'remote'],
 };
 
+/** Gemini LLM (아이디어 생성) */
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+export const IDEA_PIPELINE = {
+  llmTimeout: 30000,
+  llmRetries: 1,
+  cacheTTL: 60 * 60 * 1000, // 1시간
+};
+
 export const SERVER_PORT = parseInt(process.env.CONTENT_PORT, 10) || 3950;
