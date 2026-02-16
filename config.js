@@ -1,5 +1,10 @@
 import 'dotenv/config';
 
+const numberFromEnv = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 /** Reddit 설정 (인증 불필요, 공개 JSON API) */
 export const REDDIT = {
   userAgent: 'Mozilla/5.0 (compatible; content-tracker/1.0; +dooosp)',
@@ -90,3 +95,5 @@ export const IDEA_PIPELINE = {
 };
 
 export const SERVER_PORT = parseInt(process.env.CONTENT_PORT, 10) || 3950;
+export const CACHE_TTL_MS = numberFromEnv(process.env.CACHE_TTL_MS, 15 * 60 * 1000);
+export const SNAPSHOT_RETENTION_DAYS = numberFromEnv(process.env.SNAPSHOT_RETENTION_DAYS, 90);

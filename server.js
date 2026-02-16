@@ -3,7 +3,16 @@ const require = createRequire(import.meta.url);
 const { createServer, startServer } = require('server-base');
 import cron from 'node-cron';
 
-import { REDDIT, NAVER, TWITTER, YOUTUBE, RSS_FEEDS, GEMINI_API_KEY, SERVER_PORT } from './config.js';
+import {
+  REDDIT,
+  NAVER,
+  TWITTER,
+  YOUTUBE,
+  RSS_FEEDS,
+  GEMINI_API_KEY,
+  SERVER_PORT,
+  CACHE_TTL_MS,
+} from './config.js';
 import redditClient from './lib/reddit-client.js';
 import naverClient from './lib/naver-client.js';
 import twitterClient from './lib/twitter-client.js';
@@ -14,8 +23,13 @@ import contentScorer from './lib/content-scorer.js';
 import strategyAdvisor from './lib/strategy-advisor.js';
 import snapshotStore from './lib/snapshot-store.js';
 import { generateIdeas } from './lib/idea-generator.js';
+import { toErrorMessage } from './lib/utils.js';
 
 const SOURCE_NAMES = ['reddit', 'naver', 'twitter', 'youtube', 'rss'];
+const LIMIT_DEFAULT = 50;
+const LIMIT_MIN = 1;
+const LIMIT_MAX = 500;
+
 const asBool = (value, fallback = true) => {
   if (value === undefined || value === null || value === '') return fallback;
   const normalized = String(value).trim().toLowerCase();
@@ -28,9 +42,14 @@ const CRON_ENABLED = asBool(process.env.CRON_ENABLED, true);
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 */4 * * *';
 const CRON_TZ = process.env.CRON_TZ || 'Asia/Seoul';
 
-const toErrorMessage = (error) => {
-  if (!error) return 'Unknown error';
-  return error.message || String(error);
+const parseLimit = (value, fallback = LIMIT_DEFAULT) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, Math.trunc(parsed)));
+};
+
+const sendError = (res, status, message) => {
+  res.status(status).json({ error: message });
 };
 
 const summarizeErrors = (errors = []) => {
@@ -89,7 +108,7 @@ const app = createServer({
 
 /** 캐시 (API rate limit 보호) */
 let cache = { data: null, fetchedAt: null };
-const CACHE_TTL = 15 * 60 * 1000; // 15분
+const CACHE_TTL = CACHE_TTL_MS;
 let isRefreshing = false;
 
 async function getData(forceRefresh = false) {
@@ -125,12 +144,11 @@ async function getData(forceRefresh = false) {
     },
   ];
 
-  // 5개 소스 병렬 수집 (disabled는 빈 결과로 처리)
-  const settled = await Promise.allSettled(tasks.map(task =>
+  const settled = await Promise.allSettled(tasks.map(task => (
     task.enabled
       ? task.run()
       : Promise.resolve({ posts: [], errors: [], fetchedAt: new Date().toISOString() })
-  ));
+  )));
 
   const sources = emptySourceStates();
   const allPosts = [];
@@ -167,7 +185,7 @@ async function getData(forceRefresh = false) {
   });
 
   const seen = new Set();
-  const uniquePosts = allPosts.filter(post => {
+  const uniquePosts = allPosts.filter((post) => {
     const key = `${post?.source || 'unknown'}:${post?.postId || post?.url || ''}`;
     if (!key || seen.has(key)) return false;
     seen.add(key);
@@ -237,52 +255,52 @@ async function runCronRefresh() {
 // GET /api/content/overview — 소스별 요약 + 상위 포스트 (소스 밸런싱)
 app.get('/api/content/overview', async (req, res) => {
   try {
+    const limit = parseLimit(req.query.limit, LIMIT_DEFAULT);
     const data = await getData();
-    const toPostSummary = (p) => ({
-      title: p.title,
-      topic: p.topic,
-      source: p.source,
-      viewCount: p.viewCount,
-      commentCount: p.commentCount,
-      score: p.scoring.total,
-      signal: p.scoring.signal,
-      url: p.url,
-      publishedAt: p.publishedAt,
+
+    const toPostSummary = (post) => ({
+      title: post.title,
+      topic: post.topic,
+      source: post.source,
+      viewCount: post.viewCount,
+      commentCount: post.commentCount,
+      score: post.scoring.total,
+      signal: post.scoring.signal,
+      url: post.url,
+      publishedAt: post.publishedAt,
     });
 
     // 소스별 최소 2개 보장 후 나머지 score 순 채움 (총 10개)
     const MAX_TOP = 10;
     const MIN_PER_SOURCE = 2;
     const picked = new Set();
-    const result = [];
+    const topPosts = [];
 
-    // 1단계: 활성 소스별 Top 2 확보
-    const activeSources = SOURCE_NAMES.filter(s => data.sources[s]?.count > 0);
-    for (const src of activeSources) {
-      const srcPosts = data.posts.filter(p => p.source === src);
-      for (const p of srcPosts.slice(0, MIN_PER_SOURCE)) {
-        if (result.length >= MAX_TOP) break;
-        picked.add(p.postId);
-        result.push(toPostSummary(p));
+    const activeSources = SOURCE_NAMES.filter(source => data.sources[source]?.count > 0);
+    for (const source of activeSources) {
+      const sourcePosts = data.posts.filter(post => post.source === source);
+      for (const post of sourcePosts.slice(0, MIN_PER_SOURCE)) {
+        if (topPosts.length >= MAX_TOP) break;
+        picked.add(post.postId);
+        topPosts.push(toPostSummary(post));
       }
     }
 
-    // 2단계: 나머지 슬롯을 글로벌 score 순으로 채움
-    for (const p of data.posts) {
-      if (result.length >= MAX_TOP) break;
-      if (picked.has(p.postId)) continue;
-      result.push(toPostSummary(p));
+    for (const post of data.posts) {
+      if (topPosts.length >= MAX_TOP) break;
+      if (picked.has(post.postId)) continue;
+      topPosts.push(toPostSummary(post));
     }
 
     res.json({
       sources: data.sources,
-      topPosts: result,
-      items: data.items,
+      topPosts,
+      items: data.items.slice(0, limit),
       totalPosts: data.posts.length,
       fetchedAt: data.fetchedAt,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    sendError(res, 500, toErrorMessage(error));
   }
 });
 
@@ -294,39 +312,40 @@ app.get('/api/content/signals', async (req, res) => {
       signals: data.signals,
       portfolio: data.portfolio,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    sendError(res, 500, toErrorMessage(error));
   }
 });
 
 // GET /api/content/trends — 포스트별 추세 분석
 app.get('/api/content/trends', async (req, res) => {
   try {
+    const limit = parseLimit(req.query.limit, LIMIT_DEFAULT);
     const data = await getData();
     res.json({
-      trends: data.trends,
+      trends: data.trends.slice(0, limit),
       totalPosts: data.trends.length,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    sendError(res, 500, toErrorMessage(error));
   }
 });
 
 // GET /api/content/ideas — LLM 기반 트렌드 요약 + 아이디어 제안 + 틈새 분석
 app.get('/api/content/ideas', async (req, res) => {
   if (!GEMINI_API_KEY) {
-    return res.status(501).json({ error: 'GEMINI_API_KEY not configured' });
+    return sendError(res, 501, 'GEMINI_API_KEY not configured');
   }
 
   try {
     const data = await getData();
-    const result = await generateIdeas(data.posts, data.portfolio);
+    const result = await generateIdeas(data.posts, data.portfolio, data.fetchedAt);
     res.json(result);
-  } catch (err) {
-    if (err.code === 'NO_API_KEY') {
-      return res.status(501).json({ error: err.message });
+  } catch (error) {
+    if (error?.code === 'NO_API_KEY') {
+      return sendError(res, 501, toErrorMessage(error));
     }
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, toErrorMessage(error));
   }
 });
 
@@ -345,11 +364,11 @@ app.post('/api/content/refresh', async (req, res) => {
       snapshotPath: snapshot.path,
       fetchedAt: data.fetchedAt,
     });
-  } catch (err) {
-    if (err?.code === 'REFRESH_IN_PROGRESS') {
-      return res.status(409).json({ error: 'already refreshing' });
+  } catch (error) {
+    if (error?.code === 'REFRESH_IN_PROGRESS') {
+      return sendError(res, 409, 'already refreshing');
     }
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, toErrorMessage(error));
   }
 });
 
