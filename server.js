@@ -233,11 +233,11 @@ async function runCronRefresh() {
   }
 }
 
-// GET /api/content/overview — 소스별 요약 + 상위 포스트
+// GET /api/content/overview — 소스별 요약 + 상위 포스트 (소스 밸런싱)
 app.get('/api/content/overview', async (req, res) => {
   try {
     const data = await getData();
-    const top10 = data.posts.slice(0, 10).map(p => ({
+    const toPostSummary = (p) => ({
       title: p.title,
       topic: p.topic,
       source: p.source,
@@ -247,11 +247,35 @@ app.get('/api/content/overview', async (req, res) => {
       signal: p.scoring.signal,
       url: p.url,
       publishedAt: p.publishedAt,
-    }));
+    });
+
+    // 소스별 최소 2개 보장 후 나머지 score 순 채움 (총 10개)
+    const MAX_TOP = 10;
+    const MIN_PER_SOURCE = 2;
+    const picked = new Set();
+    const result = [];
+
+    // 1단계: 활성 소스별 Top 2 확보
+    const activeSources = SOURCE_NAMES.filter(s => data.sources[s]?.count > 0);
+    for (const src of activeSources) {
+      const srcPosts = data.posts.filter(p => p.source === src);
+      for (const p of srcPosts.slice(0, MIN_PER_SOURCE)) {
+        if (result.length >= MAX_TOP) break;
+        picked.add(p.postId);
+        result.push(toPostSummary(p));
+      }
+    }
+
+    // 2단계: 나머지 슬롯을 글로벌 score 순으로 채움
+    for (const p of data.posts) {
+      if (result.length >= MAX_TOP) break;
+      if (picked.has(p.postId)) continue;
+      result.push(toPostSummary(p));
+    }
 
     res.json({
       sources: data.sources,
-      topPosts: top10,
+      topPosts: result,
       items: data.items,
       totalPosts: data.posts.length,
       fetchedAt: data.fetchedAt,
