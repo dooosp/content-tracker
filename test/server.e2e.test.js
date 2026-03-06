@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildApp } from '../server.js';
+import { buildApp } from '../app.js';
 
 function createTestData() {
   return {
@@ -240,4 +240,3 @@ test('POST /api/content/refresh returns snapshot metadata and handles in-progres
     assert.equal(body.error, 'already refreshing');
   });
 });
-
