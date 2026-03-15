@@ -5,9 +5,10 @@ const { createServer, startServer } = require('server-base');
 import cron from 'node-cron';
 
 import { GEMINI_API_KEY, SERVER_PORT } from './config.js';
-import { createContentService } from './lib/content-service.js';
+import { createContentOrchestrator } from './lib/orchestrator/content-orchestrator.js';
 import { generateIdeas } from './lib/idea-generator.js';
-import { buildBalancedTopPosts, parseLimit, sendError } from './lib/response-builders.js';
+import { buildBalancedTopPosts } from './lib/selector/article-selector.js';
+import { parseLimit, sendError } from './lib/publisher/api-publisher.js';
 import snapshotStore from './lib/snapshot-store.js';
 import { createConfiguredSourceStates } from './lib/sources.js';
 import { toErrorMessage } from './lib/utils.js';
@@ -43,7 +44,7 @@ function createCronState(cronConfig) {
 }
 
 export function buildApp(options = {}) {
-  const contentService = options.contentService || createContentService();
+  const contentOrchestrator = options.contentOrchestrator || options.contentService || createContentOrchestrator();
   const configuredSourceStates = options.configuredSourceStates || createConfiguredSourceStates();
   const cronConfig = options.cronConfig || createCronConfig();
   const cronState = options.cronState || createCronState(cronConfig);
@@ -61,11 +62,11 @@ export function buildApp(options = {}) {
         service: 'content-tracker',
         port: SERVER_PORT,
         uptime: process.uptime(),
-        hasData: contentService.hasCachedData(),
-        sources: contentService.getCachedData()?.sources || configuredSourceStates,
+        hasData: contentOrchestrator.hasCachedData(),
+        sources: contentOrchestrator.getCachedData()?.sources || configuredSourceStates,
         cron: {
           ...cronState,
-          isRefreshing: contentService.isRefreshing(),
+          isRefreshing: contentOrchestrator.isRefreshing(),
         },
       });
     },
@@ -74,7 +75,7 @@ export function buildApp(options = {}) {
   app.get('/api/content/overview', async (req, res) => {
     try {
       const limit = parseLimit(req.query.limit, LIMIT_DEFAULT);
-      const data = await contentService.getData();
+      const data = await contentOrchestrator.getData();
 
       res.json({
         sources: data.sources,
@@ -90,7 +91,7 @@ export function buildApp(options = {}) {
 
   app.get('/api/content/signals', async (req, res) => {
     try {
-      const data = await contentService.getData();
+      const data = await contentOrchestrator.getData();
       res.json({
         signals: data.signals,
         portfolio: data.portfolio,
@@ -103,7 +104,7 @@ export function buildApp(options = {}) {
   app.get('/api/content/trends', async (req, res) => {
     try {
       const limit = parseLimit(req.query.limit, LIMIT_DEFAULT);
-      const data = await contentService.getData();
+      const data = await contentOrchestrator.getData();
       res.json({
         trends: data.trends.slice(0, limit),
         totalPosts: data.trends.length,
@@ -119,7 +120,7 @@ export function buildApp(options = {}) {
     }
 
     try {
-      const data = await contentService.getData();
+      const data = await contentOrchestrator.getData();
       const result = await ideaGenerator(data.posts, data.portfolio, data.fetchedAt);
       res.json(result);
     } catch (error) {
@@ -132,7 +133,7 @@ export function buildApp(options = {}) {
 
   app.post('/api/content/refresh', async (req, res) => {
     try {
-      const { data, snapshot } = await contentService.refreshAndSnapshot('manual');
+      const { data, snapshot } = await contentOrchestrator.refreshAndSnapshot('manual');
       const store = await snapshotStoreImpl.load();
 
       res.json({
@@ -152,14 +153,21 @@ export function buildApp(options = {}) {
     }
   });
 
-  return { app, contentService, configuredSourceStates, cronConfig, cronState };
+  return {
+    app,
+    contentOrchestrator,
+    contentService: contentOrchestrator,
+    configuredSourceStates,
+    cronConfig,
+    cronState,
+  };
 }
 
 export async function startContentTrackerServer(options = {}) {
   const built = buildApp(options);
 
   async function runCronRefresh() {
-    if (built.contentService.isRefreshing()) {
+    if (built.contentOrchestrator.isRefreshing()) {
       console.log('[content-tracker][cron] skipped: already refreshing');
       return;
     }
@@ -167,7 +175,7 @@ export async function startContentTrackerServer(options = {}) {
     built.cronState.lastRunAt = new Date().toISOString();
 
     try {
-      const { data, snapshot } = await built.contentService.refreshAndSnapshot('cron');
+      const { data, snapshot } = await built.contentOrchestrator.refreshAndSnapshot('cron');
       built.cronState.lastSuccessAt = new Date().toISOString();
       built.cronState.lastError = null;
       console.log(`[content-tracker][cron] refreshed ${data.posts.length} posts, snapshot=${snapshot.snapshotId}`);
@@ -198,4 +206,3 @@ export async function startContentTrackerServer(options = {}) {
 
   return { ...built, server };
 }
-
